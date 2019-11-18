@@ -1,0 +1,58 @@
+#定义公共节点信息
+Common:
+  InterfaceName: get_mnd_month #接口的名字，自定义，没有严格要求，忽略大小写，不能为空
+  InterfaceType: month #接口的类型，一般只有日接口和月接口之分，忽略大小写，不能为空
+  DateOffSet: -1 #负数表示上n个月，正数反之，不能为空
+  Separator: "," #分隔符
+  EndMark: "\r\n" #结束符
+  OutPutFilePath: /cmcc_na1/xfer/cbbs_interface/mcb4_mobile/file #文件的输出目录，判断存在性，不存在程序创建，不能为空
+  BackupFilePath: /cmcc_na/data02/xarchive/mcb4/mcb4_mobile #文件的备份目录，判断存在性，不存在程序创建，可为空
+  TempFilePath: #文件输出的临时目录，判断存在性，不存在程序创建，可为空
+  OutPutFileName: MND_<YYYYMM>.txt #输出的文件名字，<YYYYMM>, <YYYYMMDD>, <PROV>都可以被替换，不能为空
+  ProvCode: ALL
+
+  #数据库配置信息
+  DatabaseInfo:
+    DBType: oracle #数据库连接类型，支持oracle，mysql和hive，忽略大小写，不能为空
+    Host: #数据库主机的IP，oracle可为空，要判断IP地址的格式
+    User: cbbs_cdr4 #数据库用户名，区分大小写，不能为空
+    Passwd: yjaz91b+wl #数据库密码，区分大小写，不能为空
+    Port: #数据库端口，oracle可为空
+    Tns: cbbsdb #数据库表空间，不能为空
+
+#定义日志节点信息
+Log:
+  LogLevel: debug #日志级别，目前只有info和debug，忽略大小写，不能为空
+  LogFile: get_mnd_month.log.<YYYYMMDD> #日志输出的名称，忽略大小写，不能为空
+  LogPath: /cmcc_na1/xfer/cbbs_interface/mcb4_mobile/log #日志输出的目录，判断存在性，不存在程序创建，不能为空
+
+#定义任务列表信息
+TaskList:
+  - Task1
+
+#定义每项任务节点信息，Common节点下的配置项，都可以在Tasks节点下重新声明
+Tasks:
+  Task1:  #任务名称，必须属于TaskList任务列表里，区分大小写，不能为空
+    TaskName: get_mnd_month
+    DoTask: | #具体任务项，目前支持sql语句，后续可以支持自定义脚本，Sql语句注意断句，方便阅读 
+      SELECT substr(bill_month,1,6),
+           oper_type,
+           ded_rule,
+           ded_result,
+           user_number,
+           chrg_prov,
+           sp_code,
+           oper_code,
+           bill_flag,
+           sum(charge4)/10000,
+           sum(charge_duration),
+           sum(sms_number),
+           sum(gprs_volume),
+           count(*) cnt
+      FROM  cbbs_cdr4.CBBS_CDR_SUPDEDD_<YYYYMM>
+      WHERE sp_code='801234'
+      AND   ded_result in ('1','9')  
+      GROUP BY substr(bill_month,1,6),oper_type,ded_rule,ded_result,user_number,
+             chrg_prov,sp_code,oper_code,bill_flag
+      ORDER BY substr(bill_month,1,6),oper_type,ded_rule,ded_result,user_number,
+             chrg_prov,sp_code,oper_code,bill_flag

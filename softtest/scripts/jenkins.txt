@@ -1,0 +1,36 @@
+#参数定义
+export BUILD_ID="DoNotKillMe" 
+HOME_DIR="/nrjf2_data/bila1"
+JENKINS_HOME="${HOME_DIR}/.jenkins"
+HTML_CFG="/nrjf2_data/bila1/autotest/report/xionglw/CheckRpl_E6100_test.cfg"
+REPORT_HTML="CheckRpl_E6100_test_report.html"
+Work_Path='/nrjf2_data/bila1/asiainfo/xionglw/checkRpl'
+Data_Path='/nrjf2_data/bila1/asiainfo/xionglw/checkRpl/test_data'
+
+#上传测试文件
+cp ${JENKINS_HOME}/workspace/xionglw_Rpl_test/test_case/CheckError.py ${Work_Path}
+cp ${JENKINS_HOME}/workspace/xionglw_Rpl_test/test_case/start.sh ${Work_Path}
+cp ${JENKINS_HOME}/workspace/xionglw_Rpl_test/test_data/PAYFLOW20171029001.051 ${Data_Path}
+
+
+
+
+#执行主脚本
+cd ${Work_Path}
+python3 CheckError.py --Check 
+
+#获取测试报告
+while [ true ]
+do
+	if [ -e ${HTML_CFG} ]
+	then
+		break
+	fi
+	
+	echo "${HTML_CFG} is not exist, wait for 10s"
+	sleep 10
+done
+
+#生成html测试报告
+bash ${HOME_DIR}/asiainfo/xionglw/checkRpl/create_html_reports.sh ${HTML_CFG} ${REPORT_HTML}
+

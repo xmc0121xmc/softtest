@@ -1,0 +1,303 @@
+#!/usr/bin/python
+#-*- coding:GB2312 -*-
+from optparse import OptionParser  
+import sys,paramiko,ConfigParser
+import os,re,logging,time
+import getpass,signal
+
+#定义日志级别
+def DelimitLog(LogHead):
+    logging.basicConfig(level=logging.WARNING,
+        format='%(asctime)s %(levelname)s %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+        filename='%s_%s.log' %(LogHead,(time.strftime("%Y%m%d"))),
+        filemode='a')
+    #console = logging.StreamHandler()
+    #console.setLevel(logging.INFO)
+    #formatter = logging.Formatter('%(message)s')
+    #console.setFormatter(formatter)
+    #logging.getLogger('').addHandler(console)
+
+#获取命令行参数
+def GetParameters():
+    global Mode,Hostlist,Commlists,Type,SrcFiles,DestDir
+    Usage = "usage: %prog [options] PERSON_NAME"
+    Version="%prog 1.0.0"
+    parser = OptionParser(usage=Usage,version=Version)
+    parser.add_option('-H','--hosts',
+                    dest='HOSTS',default='hostlist',
+                    help='specify a host list file')
+    parser.add_option('-m','--mode',
+                    dest='MODE',default='exec', 
+                    help='parameter options exec or post or get, the default is exec')
+    parser.add_option('-c','--command',
+                    dest='COMMAND',
+                    help='commands to be executed, you can file')
+    parser.add_option('-s','--file',
+                    dest='SOURCEFILE',
+                    help='specifies upload or download files, you can use regular match')
+    parser.add_option('-d',
+                    dest='DESTDIR',
+                    help='upload or download files to the specified directory')
+    parser.add_option('-t','--type',
+                    dest='TYPE',default='f',
+                    help='transfer files or directories, the default file')
+    (options,args) = parser.parse_args()
+    Hostlist = options.HOSTS
+    Mode = options.MODE.lower()
+    Commlists = options.COMMAND
+    SrcFiles = options.SOURCEFILE
+    DestDir = options.DESTDIR
+    Type = options.TYPE
+    if  Mode not in ('exec','put','get'):
+        parser.print_help()   
+        sys.exit(1)
+
+#接收信号
+def Handler(SignalNum,frame):
+    if Type in ('put','get'):
+        sftp.close()
+        sys.exit(1)
+    else:
+        ssh.close()
+        sys.exit(1)
+
+signal.signal(signal.SIGHUP,Handler)
+signal.signal(signal.SIGINT,Handler)
+signal.signal(signal.SIGTERM,Handler)
+
+#检查FTP目录
+def FtpCheckDir(sftp,Dir,Prompt,Value=1):
+    try:
+        sftp.chdir(Dir)
+    except:
+        if  Value == 0:
+            return 0 
+        while True:
+           Value = raw_input('[%s]Whether to create directory "%s" (yes/no):' %(Prompt,Dir))
+           if  Value.lower() in ('y','ye','yes'):
+               try:
+                   sftp.mkdir(Dir,0755)
+                   return 1
+               except:
+                   logging.info('[%s]Create directory %s failed !!!' %(Prompt,Dir))
+                   return 0
+           elif Value.lower() in ('n','no'):
+               return 0
+
+#检查本地目录
+def LocalCheckDir(Dir,Value,Prompt):
+    print(Dir)
+    if  os.path.isdir(Dir) and os.path.exists(Dir):
+        return 1
+    if  int(Value) != 1:
+        return 0
+    else:
+        while True:
+            Value = raw_input('[%s]Whether to create directory "%s" (yes/no):' %(Prompt,Dir))
+            if  Value.lower() in ('y','ye','yes'):
+                os.makedirs(Dir)
+                return 2
+            elif Value.lower() in ('n','no'):
+                return 0
+
+#检查SFTP目标是否为文件
+def FtpCheckFile(sftp,FileName):
+     try:
+        sftp.stat(FileName)
+     except:
+        return 0
+     try:
+        sftp.chdir(FileName)
+        return 4
+     except:
+        return 1
+
+#执行命令
+def ExecCommand(ConfigFile,Commlists):
+    global ssh
+    Comm = ""
+    if not os.path.isfile(Commlists) and not os.path.exists(Commlists):
+        Comm = Commlists
+    else:
+        MatchPattern = "^#"
+        file = open(Commlists)
+        for line in file:
+            if  not re.findall(MatchPattern,line):
+                Comm = Comm + line
+        file.close()
+    HostListALL = GetConfigList(ConfigFile)
+    for Node in HostListALL:
+        GetListConfig(ConfigFile,Node)
+        Prompt = User + "@" + Ip
+        print ('-'*43 + HostName + '-'*53)
+        paramiko.util.log_to_file('paramiko.log')
+        try:
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(hostname=Ip,username=User,password=Password,port=Port,timeout=60)
+        except:
+            print ('[%s]Login failed !!!' %(Prompt))
+            continue
+        print ('[%s] run:\n%s\n' %(Prompt,Comm))
+        stdin,stdout,stderr=ssh.exec_command(Comm)
+        print ('[%s] out:' %(Prompt))
+        print (stdout.read())
+        ssh.close()
+
+#上传文件
+def UploadDir(ConfigFile,SrcFiles,DestDir,Type):
+    global sftp
+    FileNameList = []
+    SrcDir = os.path.split(SrcFiles)[0]
+    Macth = os.path.split(SrcFiles)[1]
+    Prompt = getpass.getuser() + "@localhost"
+    if not os.path.isdir(SrcDir) and not os.path.exists(SrcDir):
+        print "Directory %s does not exist" %(SrcDir)
+        sys.exit(1)
+    FileALL = os.listdir(SrcDir)
+    if Type == "f":
+        FileName = Macth 
+        print ('[%s]Matching file name     : %s' %(Prompt,FileName))
+        print ('[%s]Matching file Directory: %s' %(Prompt,SrcDir))
+        SrcFileName = os.path.join(SrcDir,FileName)
+        if  os.path.isfile(SrcFileName) and os.path.exists(SrcFileName):
+            FileNameList.append(FileName)
+        else:
+            print ('[%s]No file name: %s\n' %(FileName))
+    else:
+        print ('[%s]Matching file pattern  : %s' %(Prompt,Macth))
+        print ('[%s]Matching file Directory: %s' %(Prompt,SrcDir))
+        for File in FileALL:
+            file = re.match(Macth,File)
+            if  file:
+                FileName = "".join(File)
+                SrcFileName = os.path.join(SrcDir,FileName)
+                if  os.path.isfile(SrcFileName) and os.path.exists(SrcFileName):
+                    FileNameList.append(FileName) 
+                    print ('[%s]Matched file: %s' % (Prompt,FileName))
+    print ('\n')
+    
+    HostListALL = GetConfigList(ConfigFile)
+    for Node in HostListALL:
+        GetListConfig(ConfigFile,Node)
+        print ('-'*43 + HostName + '-'*53 + '\n')
+        Prompt = User + "@" + Ip
+        try:
+            t = paramiko.Transport((Ip,Port))
+            t.connect(username=User,password=Password)
+            sftp = paramiko.SFTPClient.from_transport(t)
+        except:
+            print ('[%s]Login failed !!!\n' %(Prompt))
+            continue
+        DestDir2 = os.path.join(DirPrefix,DestDir)
+        Value = FtpCheckDir(sftp,DestDir2,Prompt)
+        if  Value == 0:
+            sftp.close()
+        else:
+            for FileName in FileNameList:
+                SrcFileName = os.path.join(SrcDir,FileName)
+                DestFileName = os.path.join(DestDir2,FileName)
+                sftp.put(SrcFileName,DestFileName)
+                print "Upload file %s to %s Success" %(SrcFileName,DestFileName)
+        print ('\n')
+        sftp.close()
+
+#下载文件
+def DownloadDir(ConfigFile,SrcFiles,DestDir,Type):
+    global sftp
+    Prompt = getpass.getuser() + "@localhost"
+    if LocalCheckDir(DestDir,1,Prompt) == 0:
+         sys.exit(1)
+    SrcDir = os.path.split(SrcFiles)[0] 
+    Macth = os.path.split(SrcFiles)[1]
+    HostListALL = GetConfigList(ConfigFile)
+    for Node in HostListALL:
+        FileNameList = []
+        GetListConfig(ConfigFile,Node)
+        print ('-'*43 + HostName + '-'*53 + '\n')
+        SrcDir2 = os.path.join(DirPrefix,SrcDir)
+        Prompt = User + "@" + Ip
+        try:
+            t = paramiko.Transport((Ip,Port))
+            t.connect(username=User,password=Password)
+            sftp = paramiko.SFTPClient.from_transport(t)
+        except:
+            print ('[%s]Login failed !!!\n' %(Prompt))
+            continue
+        if  FtpCheckDir(sftp,SrcDir2,Prompt,0) == 0:
+            sftp.close()
+            print '[%s]No directory "%s"' %(Prompt,SrcDir2)
+        else:
+            if  Type == "f":
+                FileName = Macth
+                print "[%s]Matching file name     : %s"  %(Prompt,FileName)
+                print "[%s]Matching file Directory: %s" %(Prompt,SrcDir2)
+                SrcFileName = os.path.join(SrcDir2,FileName)
+                if  FtpCheckFile(sftp,SrcFileName) == 1:
+                    FileNameList.append(FileName)
+                else:
+                    print "[%s]No file name: %s" %(Prompt,FileName)
+            else:
+                FileALL = sftp.listdir(SrcDir2)
+                print "[%s]Matching file pattern  : %s" %(Prompt,Macth)
+                print "[%s]Matching file Directory: %s" %(Prompt,SrcDir2)
+ 
+                for File in FileALL:
+                    files = re.match(Macth,File)
+                    if  files:
+                        FileName = "".join(File)
+                        SrcFileName = os.path.join(SrcDir2,FileName)
+                        if  FtpCheckFile(sftp,SrcFileName) == 1:
+                            FileNameList.append(FileName)
+                            print "[%s]Matched file: %s" %(Prompt,FileName)
+                     
+                if  not FileNameList:
+                    print "[%s]Matched no file: %s" %(Prompt,Macth)
+             
+            for FileName in FileNameList:
+                SrcFileName = os.path.join(SrcDir2,FileName)
+                DestFileName = os.path.join(DestDir,FileName)
+                sftp.get(SrcFileName,DestFileName)
+                print "Download file %s to %s Success" %(SrcFileName,DestFileName)
+        print ('\n') 
+        sftp.close()
+
+#获取需要主机LIST
+def GetConfigList(ConfigFile):
+    list = []
+    Config = ConfigParser.RawConfigParser(allow_no_value=True)
+    Config.read(ConfigFile)
+    ListAll = Config.options('LIST')
+    return ListAll
+
+def GetListConfig(ConfigFile,Node):
+    global HostName,Ip,User,Password,Port,DirPrefix
+    HostName = ""
+    Ip = ""
+    User = ""
+    Password = ""
+    Port = "22"
+    DirPrefix = ""
+    Config = ConfigParser.RawConfigParser(allow_no_value=True)
+    Config.read(ConfigFile)
+    HostName = Config.get(Node,'HostName')
+    Ip = Config.get(Node,'Ip')
+    User = Config.get(Node,'User')
+    Password = Config.get(Node,'Password')
+    Port = Config.getint(Node,'Port')
+    DirPrefix = Config.get(Node,'DirPrefix')
+
+def main():
+    GetParameters()
+    ConfigFile = Hostlist
+    if  Mode == "exec": 
+        ExecCommand(ConfigFile,Commlists)
+    elif Mode == "put":
+         UploadDir(ConfigFile,SrcFiles,DestDir,Type)
+    elif Mode == "get":
+         DownloadDir(ConfigFile,SrcFiles,DestDir,Type)
+
+if __name__ == "__main__":
+    #DelimitLog('remote.log')
+    main() 
